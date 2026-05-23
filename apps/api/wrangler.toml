@@ -1,0 +1,20 @@
+name = "avalon-api"
+main = "src/index.ts"
+compatibility_date = "2026-05-21"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomCoordinator"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "avalon-db"
+database_id = "replace-me"
+
+[vars]
+JWT_ISSUER = "avalon-web"
+JWT_SECRET = "replace-me"

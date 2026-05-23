@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec git --git-dir=/tmp/avalon-git --work-tree="$(cd "$(dirname "$0")" && pwd)" "$@"
