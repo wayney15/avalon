@@ -492,6 +492,50 @@ label span {
   text-align: left;
 }
 
+.secret-layout {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr);
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.secret-details {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.secret-label {
+  display: block;
+  margin-bottom: 0.16rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.secret-visible-block {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.secret-art {
+  display: grid;
+  place-items: center;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top, rgba(176, 70, 43, 0.16), transparent 48%),
+    rgba(255, 247, 236, 0.92);
+  padding: 1rem;
+}
+
+.secret-role-image {
+  width: min(100%, 320px);
+  max-height: 420px;
+  height: auto;
+  object-fit: contain;
+}
+
 .callout {
   display: grid;
   gap: 0.35rem;
@@ -527,5 +571,17 @@ label span {
 
   .top-bar-main {
     justify-content: start;
+  }
+
+  .secret-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .secret-art {
+    order: -1;
+  }
+
+  .secret-role-image {
+    width: min(100%, 260px);
   }
 }

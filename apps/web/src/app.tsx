@@ -1,4 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import assassinImage from "../asset/Assasin.png";
+import loyalServantImage from "../asset/LoyalServant.png";
+import merlinImage from "../asset/Merlin.png";
+import minionOfMordredImage from "../asset/MinionOfMordred.png";
+import morganaImage from "../asset/Morgana.png";
+import mordredImage from "../asset/Mordred.png";
+import oberonImage from "../asset/Oberon.png";
+import percivalImage from "../asset/Percival.png";
 import type {
   ActiveGameView,
   AuthErrorResponse,
@@ -255,6 +263,29 @@ function presenceRoleLabel(role: "host" | "player" | "spectator"): string {
       return "观战";
     default:
       return role;
+  }
+}
+
+function roleImageSrc(role: Role | null | undefined): string | null {
+  switch (role) {
+    case "merlin":
+      return merlinImage;
+    case "percival":
+      return percivalImage;
+    case "loyal-servant":
+      return loyalServantImage;
+    case "assassin":
+      return assassinImage;
+    case "morgana":
+      return morganaImage;
+    case "mordred":
+      return mordredImage;
+    case "oberon":
+      return oberonImage;
+    case "minion":
+      return minionOfMordredImage;
+    default:
+      return null;
   }
 }
 
@@ -1761,18 +1792,14 @@ export function App() {
                           <div className="card-header">
                             <div>
                               <h4>Secret brief</h4>
-                              <p className="small-copy">Press and hold to reveal your private information.</p>
+                              <p className="small-copy">Click to reveal your private information. Click the reveal card again to hide it.</p>
                             </div>
                             <button
                               className={isSecretRevealActive ? "chip active" : "chip"}
-                              onMouseDown={() => setIsSecretRevealActive(true)}
-                              onMouseLeave={() => setIsSecretRevealActive(false)}
-                              onMouseUp={() => setIsSecretRevealActive(false)}
-                              onTouchEnd={() => setIsSecretRevealActive(false)}
-                              onTouchStart={() => setIsSecretRevealActive(true)}
+                              onClick={() => setIsSecretRevealActive((current) => !current)}
                               type="button"
                             >
-                              Hold to reveal
+                              {isSecretRevealActive ? "Hide reveal" : "Click to reveal"}
                             </button>
                             {activeGame ? (
                               <button className="chip" onClick={refreshSecretState} type="button">
@@ -1780,25 +1807,52 @@ export function App() {
                               </button>
                             ) : null}
                           </div>
-                          <div className={isSecretRevealActive ? "secret-body revealed" : "secret-body"}>
+                          <div
+                            className={isSecretRevealActive ? "secret-body revealed" : "secret-body"}
+                            onClick={isSecretRevealActive ? () => setIsSecretRevealActive(false) : undefined}
+                          >
                             {isSecretRevealActive ? (
                               <>
-                                <p>
-                                  <strong>{session?.user.displayName ?? "Player"}</strong>
-                                </p>
-                                <p>
-                                  <strong>{secretState.role ? roleLabel(secretState.role) : "观战"}</strong> • {teamLabel(secretState)}
-                                </p>
-                                <ul className="visible-players">
-                                  {secretState.visiblePlayers.length === 0 ? <li>No extra private information.</li> : null}
-                                  {secretState.visiblePlayers.map((player) => (
-                                    <li key={`${player.userId}-${player.reason}`}>
-                                      {player.displayName}
-                                      {player.role ? ` • ${roleLabel(player.role)}` : ""}
-                                      {player.team ? ` • ${player.team}` : ""}
-                                    </li>
-                                  ))}
-                                </ul>
+                                <div className="secret-layout">
+                                  <div className="secret-details">
+                                    <p>
+                                      <span className="secret-label">User</span>
+                                      <strong>{session?.user.displayName ?? "Player"}</strong>
+                                    </p>
+                                    <p>
+                                      <span className="secret-label">Role</span>
+                                      <strong>{secretState.role ? roleLabel(secretState.role) : "观战"}</strong>
+                                    </p>
+                                    <p>
+                                      <span className="secret-label">Side</span>
+                                      <strong>{teamLabel(secretState)}</strong>
+                                    </p>
+                                    <div className="secret-visible-block">
+                                      <p>
+                                        <span className="secret-label">Visible players</span>
+                                      </p>
+                                      <ul className="visible-players">
+                                        {secretState.visiblePlayers.length === 0 ? <li>No extra private information.</li> : null}
+                                        {secretState.visiblePlayers.map((player) => (
+                                          <li key={`${player.userId}-${player.reason}`}>
+                                            {player.displayName}
+                                            {player.role ? ` • ${roleLabel(player.role)}` : ""}
+                                            {player.team ? ` • ${player.team}` : ""}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  </div>
+                                  <div className="secret-art">
+                                    {secretState.role ? (
+                                      <img
+                                        alt={roleLabel(secretState.role)}
+                                        className="secret-role-image"
+                                        src={roleImageSrc(secretState.role) ?? undefined}
+                                      />
+                                    ) : null}
+                                  </div>
+                                </div>
                               </>
                             ) : (
                               <p>Private information hidden.</p>
