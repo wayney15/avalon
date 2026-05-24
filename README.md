@@ -1,4 +1,4 @@
-# Avalon Hosting Guide
+# Avalon Hosting Guide 
 
 This repository is a monorepo for a Cloudflare-first Avalon app:
 
