@@ -114,7 +114,9 @@ After deploy, note the public Worker URL, for example:
 ```text
 https://avalon-api.<your-subdomain>.workers.dev
 ```
-
+```
+https://avalon-api.wayney411.workers.dev
+```
 If you want a cleaner production URL, attach a custom domain to the Worker and use that instead.
 
 ## Deploy The Frontend
@@ -137,7 +139,19 @@ VITE_API_BASE_URL=https://avalon-api.<your-subdomain>.workers.dev
 
 If your API uses a custom domain, use that URL instead.
 
-### Option B: Manual static deploy
+### Option B: Cloudflare Workers static assets via Wrangler
+
+If you want to use `wrangler deploy` for the frontend instead of Pages, this repo now includes [`apps/web/wrangler.jsonc`](/mnt/h/avalon/avalon/apps/web/wrangler.jsonc).
+
+Build and deploy with:
+
+```bash
+VITE_API_BASE_URL=https://avalon-api.<your-subdomain>.workers.dev npm run deploy:web
+```
+
+That config tells Wrangler to publish the built `apps/web/dist` directory and uses SPA fallback routing so deep links like `/rooms/invite/...` resolve to `index.html`.
+
+### Option C: Manual static deploy
 
 Build the frontend locally:
 
@@ -230,3 +244,27 @@ After both deployments are live:
 - The Worker config currently contains placeholders in [`apps/api/wrangler.toml`](/mnt/h/avalon/project/apps/api/wrangler.toml); those must be replaced before production deploy.
 - The frontend defaults to `window.location.origin` when `VITE_API_BASE_URL` is unset. That only works if the API is served from the same origin path layout. In most deployments you should set `VITE_API_BASE_URL` explicitly.
 - Durable Objects require deployment through Cloudflare Workers. If you move the API off Cloudflare, the realtime room system will need to be redesigned.
+
+
+## Hosting locally
+npm install
+
+Create apps/api/.dev.vars with:
+
+JWT_SECRET=local-dev-secret
+JWT_ISSUER=avalon-web
+
+Then run the local database migrations:
+
+npm run db:migrate:local
+
+Start the API in one terminal:
+
+npm run dev:api
+
+Start the web app in a second terminal:
+
+VITE_API_BASE_URL=http://127.0.0.1:8787 npm run dev:web
+
+## tailing logs
+npx wrangler tail --config wrangler.toml

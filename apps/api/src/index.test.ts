@@ -97,6 +97,14 @@ function createFakeDb(state: FakeDbState): D1Database {
                 return state.gameSummary;
               }
 
+              if (query.includes("FROM rooms") && query.includes("WHERE code = ?")) {
+                return state.roomDetail;
+              }
+
+              if (query.includes("FROM rooms") && query.includes("WHERE invite_token = ?")) {
+                return state.roomDetail;
+              }
+
               if (query.includes("FROM (") && query.includes("ORDER BY activityAt DESC")) {
                 return state.recentRoomId ? { roomId: state.recentRoomId } : null;
               }
@@ -118,6 +126,9 @@ function createFakeDb(state: FakeDbState): D1Database {
               }
 
               throw new Error(`Unhandled first() query: ${query} :: ${JSON.stringify(params)}`);
+            },
+            async run() {
+              return { success: true };
             }
           };
         }
@@ -372,6 +383,71 @@ describe("GET /api/games/:gameId replay filtering", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "game_in_progress"
     });
+  });
+});
+
+describe("POST /api/rooms/join", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(verifyJwt).mockResolvedValue({
+      displayName: "Player One",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      iat: Math.floor(Date.now() / 1000),
+      iss: "issuer",
+      sub: "user-1",
+      username: "player1"
+    });
+  });
+
+  it("allows an existing member to rejoin a locked room", async () => {
+    const db = createFakeDb({
+      events: [],
+      gamePlayer: null,
+      gameSummary: null,
+      historyGames: [],
+      replayPlayers: [],
+      liveViewerRole: "member",
+      recentRoomId: null,
+      roomCounts: { playerCount: 5, spectatorCount: 1 },
+      roomDetail: {
+        activeGameId: "game-1",
+        code: "ABCDE",
+        createdAt: "2026-05-23T12:00:00.000Z",
+        hostUserId: "user-9",
+        id: "room-1",
+        inviteToken: "invite-1",
+        name: "Locked Room",
+        status: "locked",
+        updatedAt: "2026-05-23T12:05:00.000Z"
+      },
+      user: {
+        displayName: "Player One",
+        id: "user-1",
+        username: "player1"
+      }
+    });
+
+    const response = await app.fetch(
+      new Request("http://local/api/rooms/join", {
+        body: JSON.stringify({ roomCode: "ABCDE" }),
+        headers: {
+          Authorization: "Bearer token",
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      }),
+      createEnv(db)
+    );
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as { room: { id: string; visibility: string; hasActiveGame: boolean } };
+    expect(payload.room).toEqual(
+      expect.objectContaining({
+        hasActiveGame: true,
+        id: "room-1",
+        visibility: "locked"
+      })
+    );
   });
 });
 

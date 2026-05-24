@@ -9,6 +9,7 @@ import type {
   GameSummary,
   JoinRoomResponse,
   QuestVote,
+  RecentRoomResponse,
   Role,
   RoomClientEvent,
   RoomDetailResponse,
@@ -409,6 +410,7 @@ export function App() {
   const inviteTokenFromPath = useMemo(() => parseInviteTokenFromPath(window.location.pathname), []);
   const socketRef = useRef<WebSocket | null>(null);
   const playerLookupRef = useRef<Map<string, string>>(new Map());
+  const reconnectTimerRef = useRef<number | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [session, setSession] = useState<AuthSession | null>(() => loadSession());
   const [activeRoom, setActiveRoom] = useState<RoomSummary | null>(null);
@@ -441,6 +443,7 @@ export function App() {
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [submittedTeamVote, setSubmittedTeamVote] = useState<TeamVote | null>(null);
   const [submittedQuestVote, setSubmittedQuestVote] = useState(false);
+  const [socketReconnectNonce, setSocketReconnectNonce] = useState(0);
 
   const viewerRole = inferViewerPresenceRole(snapshot, session?.user.id ?? "");
   const isHost = viewerRole === "host";
@@ -500,6 +503,10 @@ export function App() {
 
   useEffect(() => {
     if (!session) {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       setActiveRoom(null);
       setSnapshot(null);
       setHistoryGames([]);
@@ -544,6 +551,14 @@ export function App() {
   }, [session?.token]);
 
   useEffect(() => {
+    if (!session || activeRoom) {
+      return;
+    }
+
+    void restoreRoomSession({ silent: true });
+  }, [activeRoom, inviteTokenFromPath, session]);
+
+  useEffect(() => {
     if (!activeRoom || !session) {
       return;
     }
@@ -570,6 +585,10 @@ export function App() {
 
   useEffect(() => {
     if (!activeRoom || !session) {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       socketRef.current?.close();
       socketRef.current = null;
       setSocketStatus("offline");
@@ -579,6 +598,12 @@ export function App() {
     }
 
     setLiveActivity([]);
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    let cancelled = false;
     const socket = new WebSocket(wsUrlForRoom(activeRoom.id, session.token));
     socketRef.current = socket;
     setSocketStatus("connecting");
@@ -820,10 +845,20 @@ export function App() {
     });
 
     socket.addEventListener("close", () => {
+      if (cancelled) {
+        return;
+      }
       if (socketRef.current === socket) {
         socketRef.current = null;
       }
       setSocketStatus("offline");
+
+      if (reconnectTimerRef.current === null) {
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          setSocketReconnectNonce((current) => current + 1);
+        }, 1000);
+      }
     });
 
     socket.addEventListener("error", () => {
@@ -833,12 +868,13 @@ export function App() {
     saveLastRoomId(activeRoom.id);
 
     return () => {
+      cancelled = true;
       socket.close();
       if (socketRef.current === socket) {
         socketRef.current = null;
       }
     };
-  }, [activeRoom?.id, session?.token]);
+  }, [activeRoom?.id, session?.token, socketReconnectNonce]);
 
   useEffect(() => {
     if (!activeGame) {
@@ -942,6 +978,60 @@ export function App() {
     setScreenNotice(null);
   }
 
+  async function restoreRoomSession(options?: { silent?: boolean }): Promise<boolean> {
+    if (!session || activeRoom) {
+      return false;
+    }
+
+    const inviteToken = inviteTokenFromPath;
+    const lastRoomId = loadLastRoomId();
+
+    if (inviteToken) {
+      try {
+        const response = await requestJson<JoinRoomResponse>(
+          "/api/rooms/join",
+          {
+            body: JSON.stringify({ inviteToken }),
+            method: "POST"
+          },
+          session.token
+        );
+        setActiveRoom(response.room);
+        setLastInviteUrl(new URL(`/rooms/invite/${inviteToken}`, window.location.origin).toString());
+        return true;
+      } catch {
+        // Fall through to stored room recovery.
+      }
+    }
+
+    if (lastRoomId) {
+      try {
+        const response = await requestJson<RoomDetailResponse>(`/api/rooms/${lastRoomId}`, { method: "GET" }, session.token);
+        setActiveRoom(response.room);
+        setLastInviteUrl(response.inviteUrl);
+        return true;
+      } catch {
+        saveLastRoomId(null);
+      }
+    }
+
+    try {
+      const response = await requestJson<RecentRoomResponse>("/api/rooms/recent", { method: "GET" }, session.token);
+      if (response.room) {
+        setActiveRoom(response.room);
+        return true;
+      }
+    } catch {
+      // Ignore here and handle below.
+    }
+
+    if (!options?.silent) {
+      setScreenError("No room was found to rejoin.");
+    }
+
+    return false;
+  }
+
   async function handleAuthSubmit(): Promise<void> {
     clearFeedback();
     setIsBusy(true);
@@ -1022,6 +1112,20 @@ export function App() {
       setScreenNotice(joinForm.asSpectator ? "Joined as spectator." : "Joined room.");
     } catch (error) {
       setScreenError(error instanceof Error ? error.message : "Unable to join room.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRejoinRoom(): Promise<void> {
+    clearFeedback();
+    setIsBusy(true);
+
+    try {
+      const rejoined = await restoreRoomSession();
+      if (rejoined) {
+        setScreenNotice("Rejoined room.");
+      }
     } finally {
       setIsBusy(false);
     }
@@ -1355,6 +1459,9 @@ export function App() {
                   </label>
                   <button disabled={isBusy} onClick={() => void handleJoinRoom()} type="button">
                     Join room
+                  </button>
+                  <button className="ghost-button" disabled={isBusy} onClick={() => void handleRejoinRoom()} type="button">
+                    Rejoin
                   </button>
                 </div>
 

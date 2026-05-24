@@ -517,12 +517,28 @@ app.post("/api/rooms/join", async (c) => {
     return c.json(authError("room_not_found", "That room does not exist."), 404);
   }
 
-  if (room.status !== "open") {
-    return c.json(authError("room_locked", "This room is locked while a game is in progress."), 409);
-  }
-
   const user = c.get("authUser");
   const wantsSpectator = payload.asSpectator === true;
+  const existingRole = await loadRoomViewerRole(c.env.DB, room.id, user.id);
+
+  if (room.status !== "open") {
+    if (!existingRole) {
+      return c.json(authError("room_locked", "This room is locked while a game is in progress."), 409);
+    }
+
+    await updateRoomTimestamp(c.env.DB, room.id);
+    const summary = await loadRoomSummary(c.env.DB, room.id);
+
+    if (!summary) {
+      return c.json(authError("room_join_failed", "The room could not be joined."), 500);
+    }
+
+    const response: JoinRoomResponse = {
+      room: summary
+    };
+
+    return c.json(response);
+  }
 
   if (wantsSpectator && room.hostUserId === user.id) {
     return c.json(authError("invalid_request", "The host must remain a player in the room."), 400);

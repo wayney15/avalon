@@ -13,8 +13,8 @@ new_sqlite_classes = ["RoomCoordinator"]
 [[d1_databases]]
 binding = "DB"
 database_name = "avalon-db"
-database_id = "replace-me"
+database_id = "e9f36b5c-acb0-4b86-a58e-428acf02edbc"
 
 [vars]
 JWT_ISSUER = "avalon-web"
-JWT_SECRET = "replace-me"
+JWT_SECRET = "waYne1sThaBoss"
