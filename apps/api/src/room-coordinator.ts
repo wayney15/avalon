@@ -107,9 +107,9 @@ export class RoomCoordinator {
     }
 
     const roomId = request.headers.get("x-avalon-room-id") ?? url.searchParams.get("roomId");
-    const userId = request.headers.get("x-avalon-user-id");
-    const username = request.headers.get("x-avalon-username");
-    const displayName = request.headers.get("x-avalon-display-name");
+    const userId = request.headers.get("x-avalon-user-id") ?? url.searchParams.get("userId");
+    const username = request.headers.get("x-avalon-username") ?? url.searchParams.get("username");
+    const displayName = request.headers.get("x-avalon-display-name") ?? url.searchParams.get("displayName");
 
     if (!roomId || !userId || !username || !displayName) {
       return jsonResponse({ error: "Missing room or user context." }, 400);

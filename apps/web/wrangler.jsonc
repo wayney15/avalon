@@ -1,8 +1,13 @@
 {
   "name": "avalon-web",
   "compatibility_date": "2026-05-23",
+  "main": "src/worker.ts",
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application"
+  },
+  "vars": {
+    "API_ORIGIN": "https://avalon-api.wayney411.workers.dev"
   }
 }

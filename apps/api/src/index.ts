@@ -686,13 +686,13 @@ app.get("/api/rooms/:roomId/ws", async (c) => {
   const stub = c.env.ROOMS.get(c.env.ROOMS.idFromName(roomId));
   const url = new URL("https://rooms.internal/ws");
   url.searchParams.set("roomId", roomId);
+  url.searchParams.set("displayName", user.displayName);
+  url.searchParams.set("userId", user.id);
+  url.searchParams.set("username", user.username);
 
   const headers = new Headers();
   headers.set("Upgrade", "websocket");
-  headers.set("x-avalon-display-name", user.displayName);
   headers.set("x-avalon-room-id", roomId);
-  headers.set("x-avalon-user-id", user.id);
-  headers.set("x-avalon-username", user.username);
 
   return stub.fetch(
     new Request(url, {

@@ -143,13 +143,15 @@ If your API uses a custom domain, use that URL instead.
 
 If you want to use `wrangler deploy` for the frontend instead of Pages, this repo now includes [`apps/web/wrangler.jsonc`](/mnt/h/avalon/avalon/apps/web/wrangler.jsonc).
 
+That worker serves the built SPA and proxies same-origin `/api/*` requests to the API Worker configured by `API_ORIGIN` in `apps/web/wrangler.jsonc`.
+
 Build and deploy with:
 
 ```bash
-VITE_API_BASE_URL=https://avalon-api.<your-subdomain>.workers.dev npm run deploy:web
+npm run deploy:web
 ```
 
-That config tells Wrangler to publish the built `apps/web/dist` directory and uses SPA fallback routing so deep links like `/rooms/invite/...` resolve to `index.html`.
+That config tells Wrangler to publish the built `apps/web/dist` directory, uses SPA fallback routing so deep links like `/rooms/invite/...` resolve to `index.html`, and forwards `/api/*` and room WebSocket traffic to the configured API origin.
 
 ### Option C: Manual static deploy
 
@@ -242,7 +244,8 @@ After both deployments are live:
 ## Current Repo-Specific Notes
 
 - The Worker config currently contains placeholders in [`apps/api/wrangler.toml`](/mnt/h/avalon/project/apps/api/wrangler.toml); those must be replaced before production deploy.
-- The frontend defaults to `window.location.origin` when `VITE_API_BASE_URL` is unset. That only works if the API is served from the same origin path layout. In most deployments you should set `VITE_API_BASE_URL` explicitly.
+- For Pages or any other plain static host, set `VITE_API_BASE_URL` explicitly.
+- For `wrangler deploy` using [`apps/web/wrangler.jsonc`](/mnt/h/avalon/avalon/apps/web/wrangler.jsonc), same-origin `/api` routing is handled by the web worker proxy via `API_ORIGIN`.
 - Durable Objects require deployment through Cloudflare Workers. If you move the API off Cloudflare, the realtime room system will need to be redesigned.
 
 

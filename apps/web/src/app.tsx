@@ -80,6 +80,13 @@ function resolveApiBase(): string {
     return fromEnv.replace(/\/$/, "");
   }
 
+  const isLocalHost =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+  if (!isLocalHost) {
+    throw new Error("VITE_API_BASE_URL is required for non-local frontend builds.");
+  }
+
   return window.location.origin.replace(/\/$/, "");
 }
 
@@ -411,6 +418,7 @@ export function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const playerLookupRef = useRef<Map<string, string>>(new Map());
   const reconnectTimerRef = useRef<number | null>(null);
+  const suppressAutoRestoreRef = useRef(false);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [session, setSession] = useState<AuthSession | null>(() => loadSession());
   const [activeRoom, setActiveRoom] = useState<RoomSummary | null>(null);
@@ -552,6 +560,11 @@ export function App() {
 
   useEffect(() => {
     if (!session || activeRoom) {
+      return;
+    }
+
+    if (suppressAutoRestoreRef.current) {
+      suppressAutoRestoreRef.current = false;
       return;
     }
 
@@ -1144,9 +1157,13 @@ export function App() {
   }
 
   async function handleLeaveRoom(): Promise<void> {
+    suppressAutoRestoreRef.current = true;
     sendEvent({ payload: { roomId: activeRoom?.id ?? "" }, type: "room.leave" });
     socketRef.current?.close();
     socketRef.current = null;
+    if (window.location.pathname.startsWith("/rooms/invite/")) {
+      window.history.replaceState({}, "", "/");
+    }
     setActiveRoom(null);
     setSnapshot(null);
     setHistorySelectionOpen(false);
