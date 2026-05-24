@@ -137,6 +137,13 @@ pre {
   font-size: 0.78rem;
 }
 
+.top-bar-actions {
+  position: relative;
+  display: flex;
+  align-self: start;
+  justify-content: end;
+}
+
 .panel h2,
 .card h3,
 .card h4 {
@@ -318,6 +325,49 @@ label span {
 .history-button.active {
   background: var(--accent-soft);
   box-shadow: inset 0 0 0 1px rgba(165, 63, 37, 0.26);
+}
+
+.active-top-bar-button {
+  background: var(--accent-soft);
+}
+
+.top-bar-actions > .ghost-button {
+  font-size: 0.88rem;
+  padding: 0.5rem 0.82rem;
+}
+
+.chat-menu {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  right: 0;
+  width: min(22rem, calc(100vw - 2rem));
+  border: 1px solid var(--line-strong);
+  border-radius: 24px;
+  background: var(--panel-strong);
+  box-shadow: var(--shadow);
+  padding: 0.5rem;
+  z-index: 20;
+}
+
+.chat-menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.chat-menu-item {
+  width: 100%;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink);
+  font-weight: 600;
+  padding: 0.9rem 1rem;
+  text-align: left;
 }
 
 .segmented,
@@ -554,6 +604,30 @@ label span {
   margin: 0;
 }
 
+.chat-popup-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  border-radius: 0;
+  background: rgba(32, 24, 17, 0.42);
+  z-index: 40;
+}
+
+.chat-popup-card {
+  display: block;
+  width: min(30rem, 100%);
+  border-radius: 28px;
+  background: var(--panel-strong);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 1.05rem;
+  line-height: 1.5;
+  padding: 1.35rem 1.5rem;
+  text-align: center;
+}
+
 @media (min-width: 820px) {
   .app-shell {
     padding: 1.5rem;
@@ -570,7 +644,18 @@ label span {
   }
 
   .top-bar-main {
+    align-items: start;
+    flex-direction: column;
     justify-content: start;
+  }
+
+  .top-bar-actions {
+    width: 100%;
+    justify-content: end;
+  }
+
+  .chat-menu {
+    width: 100%;
   }
 
   .secret-layout {

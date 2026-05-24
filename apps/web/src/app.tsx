@@ -7,6 +7,7 @@ import morganaImage from "../asset/Morgana.png";
 import mordredImage from "../asset/Mordred.png";
 import oberonImage from "../asset/Oberon.png";
 import percivalImage from "../asset/Percival.png";
+import predefinedSentencesText from "../asset/sentence.txt?raw";
 import type {
   ActiveGameView,
   AuthErrorResponse,
@@ -29,6 +30,7 @@ import type {
   UserHistoryResponse,
   ViewerSecretState
 } from "../../../packages/shared/src";
+import { normalizePredefinedSentences } from "../../../packages/shared/src";
 
 type AuthMode = "login" | "signup";
 type SocketStatus = "offline" | "connecting" | "connected";
@@ -73,6 +75,11 @@ interface ReplayEntry {
   message: string;
 }
 
+interface ChatPopupItem {
+  id: string;
+  message: string;
+}
+
 const API_BASE = resolveApiBase();
 const SESSION_STORAGE_KEY = "avalon.session";
 const LAST_ROOM_STORAGE_KEY = "avalon.last-room-id";
@@ -81,6 +88,7 @@ const ROLE_OPTIONS: Array<{ label: string; value: RoleChoice }> = [
   { label: "奥伯伦", value: "oberon" }
 ];
 const MANDATORY_ROLES: RoleChoice[] = ["merlin", "percival", "assassin", "morgana"];
+const PREDEFINED_CHAT_SENTENCES = normalizePredefinedSentences(predefinedSentencesText);
 
 function resolveApiBase(): string {
   const fromEnv = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -203,10 +211,19 @@ function summarizeRoomEvent(
       return "Room returned to lobby state.";
     case "game.team.proposed":
       return `${resolveName(event.payload.leaderUserId)} proposed ${event.payload.teamUserIds.map(resolveName).join(", ")}.`;
-    case "game.team.vote.revealed":
+    case "game.team.vote.revealed": {
+      const approvedBy = event.payload.votes
+        .filter((entry) => entry.vote === "approve")
+        .map((entry) => resolveName(entry.userId))
+        .join(" ");
+      const rejectedBy = event.payload.votes
+        .filter((entry) => entry.vote === "reject")
+        .map((entry) => resolveName(entry.userId))
+        .join(" ");
       return event.payload.approved
-        ? `Team approved on round ${event.payload.round}.`
-        : `Team rejected. Reject track is ${event.payload.rejectTracker}.`;
+        ? `Team approved.\nApproved with ✓:${approvedBy || "none"}\nRejected with ✗:${rejectedBy || "none"}`
+        : `Team rejected.\nApproved with ✓:${approvedBy || "none"}\nRejected with ✗:${rejectedBy || "none"}`;
+    }
     case "game.quest.result.revealed":
       return `Quest ${event.payload.round} ${event.payload.winner === "good" ? "succeeded" : "failed"} with ${event.payload.failCount} fail card${event.payload.failCount === 1 ? "" : "s"}.`;
     case "game.paused":
@@ -308,6 +325,10 @@ function missionTrack(results: Array<"success" | "fail">): string {
     }
     return "-";
   }).join(" ");
+}
+
+function isActiveGameplayStatus(status: ActiveGameView["status"]): boolean {
+  return status !== "finished" && status !== "unfinished";
 }
 
 function formatTeamVoteBreakdown(
@@ -483,11 +504,14 @@ export function App() {
   const [submittedTeamVote, setSubmittedTeamVote] = useState<TeamVote | null>(null);
   const [submittedQuestVote, setSubmittedQuestVote] = useState(false);
   const [socketReconnectNonce, setSocketReconnectNonce] = useState(0);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const [chatPopups, setChatPopups] = useState<ChatPopupItem[]>([]);
 
   const viewerRole = inferViewerPresenceRole(snapshot, session?.user.id ?? "");
   const isHost = viewerRole === "host";
   const isPlayer = viewerRole === "host" || viewerRole === "player";
   const activeGame = snapshot?.activeGame ?? null;
+  const isGameInProgress = activeGame ? isActiveGameplayStatus(activeGame.status) : false;
   const currentUserId = session?.user.id ?? "";
   const players = snapshot?.players ?? [];
   const seatedPlayers = snapshot?.seats ?? [];
@@ -535,6 +559,9 @@ export function App() {
     snapshot?.viewerSecretState?.viewerRole === "player" &&
     snapshot.viewerSecretState.role === "assassin";
   const gamePaused = Boolean(activeGame) && disconnectedPlayers.length > 0;
+  const canUsePredefinedChat = isPlayer && isGameInProgress && !gamePaused;
+  const activeChatPopup = chatPopups[0] ?? null;
+  const showLiveActivity = Boolean(activeGame) || liveActivity.length > 0;
 
   useEffect(() => {
     playerLookupRef.current = playerLookup;
@@ -553,6 +580,8 @@ export function App() {
       setHistorySelectionLoading(false);
       setReplay({ data: null, error: null, gameId: null, loading: false });
       setLiveActivity([]);
+      setChatMenuOpen(false);
+      setChatPopups([]);
       saveSession(null);
       saveLastRoomId(null);
       return;
@@ -638,6 +667,8 @@ export function App() {
       setSocketStatus("offline");
       setSnapshot(null);
       setLiveActivity([]);
+      setChatMenuOpen(false);
+      setChatPopups([]);
       return;
     }
 
@@ -829,6 +860,17 @@ export function App() {
         return;
       }
 
+      if (parsed.type === "game.predefined-chat.sent") {
+        setChatPopups((current) => [
+          ...current,
+          {
+            id: `${parsed.payload.senderUserId}-${parsed.occurredAt}-${current.length}`,
+            message: `${parsed.payload.senderDisplayName}: ${parsed.payload.sentence}`
+          }
+        ]);
+        return;
+      }
+
       if (parsed.type === "game.finished") {
         updateSnapshotState((current) =>
           withActiveGame(current, (game) =>
@@ -946,6 +988,12 @@ export function App() {
       };
     });
   }, [activeGame, players]);
+
+  useEffect(() => {
+    if (!canUsePredefinedChat) {
+      setChatMenuOpen(false);
+    }
+  }, [canUsePredefinedChat]);
 
   function syncRoomSummaryFromSnapshot(nextSnapshot: RoomSnapshotEventPayload): void {
     setActiveRoom((current) =>
@@ -1200,6 +1248,8 @@ export function App() {
     setHistorySelectionOpen(false);
     setReplay({ data: null, error: null, gameId: null, loading: false });
     setLiveActivity([]);
+    setChatMenuOpen(false);
+    setChatPopups([]);
     setLastInviteUrl(null);
     saveLastRoomId(null);
   }
@@ -1345,6 +1395,22 @@ export function App() {
     });
   }
 
+  function sendPredefinedChat(sentence: string): void {
+    if (!activeGame) {
+      return;
+    }
+
+    if (sendEvent({
+      payload: {
+        gameId: activeGame.id,
+        sentence
+      },
+      type: "game.send-predefined-chat"
+    })) {
+      setChatMenuOpen(false);
+    }
+  }
+
   const proposalLeaderName = activeGame ? playerLookup.get(activeGame.leaderUserId) ?? activeGame.leaderUserId : null;
   const secretState = snapshot?.viewerSecretState ?? null;
   const canAdvanceNight =
@@ -1374,6 +1440,34 @@ export function App() {
             <strong>{session ? session.user.displayName : "Signed out"}</strong>
             <span className="top-bar-room">{activeRoom ? activeRoom.code : "No room"}</span>
           </div>
+          {canUsePredefinedChat ? (
+            <div className="top-bar-actions">
+              <button
+                className={chatMenuOpen ? "ghost-button active-top-bar-button" : "ghost-button"}
+                onClick={() => setChatMenuOpen((current) => !current)}
+                type="button"
+              >
+                Chat
+              </button>
+              {chatMenuOpen ? (
+                <div className="chat-menu" role="menu">
+                  <ul className="chat-menu-list">
+                    {PREDEFINED_CHAT_SENTENCES.map((sentence) => (
+                      <li key={sentence}>
+                        <button
+                          className="chat-menu-item"
+                          onClick={() => sendPredefinedChat(sentence)}
+                          type="button"
+                        >
+                          {sentence}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -2058,7 +2152,7 @@ export function App() {
                   {lastEvent ? <p className="small-copy">Latest event: {lastEvent.type}</p> : null}
                 </div>
 
-                {activeGame ? (
+                {showLiveActivity ? (
                   <div className="card">
                     <ul className="activity-list">
                       {liveActivity.length === 0 ? <li className="empty">Live room events will appear here.</li> : null}
@@ -2077,6 +2171,17 @@ export function App() {
           ) : null}
         </>
       )}
+
+      {activeChatPopup ? (
+        <button
+          aria-label="Dismiss chat message"
+          className="chat-popup-overlay"
+          onClick={() => setChatPopups((current) => current.slice(1))}
+          type="button"
+        >
+          <span className="chat-popup-card">{activeChatPopup.message}</span>
+        </button>
+      ) : null}
     </main>
   );
 }

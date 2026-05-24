@@ -132,6 +132,7 @@ export type RoomClientEvent =
   | { type: "game.submit-team-vote"; payload: { gameId: string; vote: TeamVote } }
   | { type: "game.submit-quest-vote"; payload: { gameId: string; vote: QuestVote } }
   | { type: "game.submit-assassination"; payload: { gameId: string; targetUserId: string } }
+  | { type: "game.send-predefined-chat"; payload: { gameId: string; sentence: string } }
   | { type: "game.request-role-reveal"; payload: { gameId: string } };
 
 export type RoomServerEvent =
@@ -220,6 +221,16 @@ export type RoomServerEvent =
       type: "game.assassination.started";
       occurredAt: string;
       payload: { gameId: string; assassinUserId: string; candidateUserIds: string[] };
+    }
+  | {
+      type: "game.predefined-chat.sent";
+      occurredAt: string;
+      payload: {
+        gameId: string;
+        senderDisplayName: string;
+        senderUserId: string;
+        sentence: string;
+      };
     }
   | {
       type: "game.finished";

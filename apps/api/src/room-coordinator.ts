@@ -1,6 +1,7 @@
 import type { AuthUser, GameSummary, QuestVote, Role, RoomClientEvent, RoomServerEvent } from "../../../packages/shared/src";
 import { assignRolesToRoster, isTwoFailMission, missionTeamSize, shuffleValues, validateRoleSelection } from "./game-rules";
 import type { Env } from "./context";
+import { isPredefinedChatSentence } from "./predefined-chat";
 import { loadRoomPresenceState, loadRoomSnapshotPayload } from "./room-state";
 import {
   appendGameEvent,
@@ -43,6 +44,10 @@ interface ReplaySummaryRow extends GameSummary {}
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isActiveGameplayStatus(status: string): boolean {
+  return status !== "finished" && status !== "unfinished";
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -352,6 +357,9 @@ export class RoomCoordinator {
         return;
       case "game.submit-assassination":
         await this.handleSubmitAssassination(connection, ws, event.payload.gameId, event.payload.targetUserId);
+        return;
+      case "game.send-predefined-chat":
+        await this.handleSendPredefinedChat(connection, ws, event.payload.gameId, event.payload.sentence);
         return;
       case "game.request-role-reveal":
         await this.handleRequestRoleReveal(connectionId, connection, ws, event.payload.gameId);
@@ -1401,6 +1409,68 @@ export class RoomCoordinator {
     await this.sendSnapshot(connectionId);
   }
 
+  private async handleSendPredefinedChat(
+    connection: RoomConnection,
+    ws: WebSocket,
+    gameId: string,
+    sentence: string
+  ): Promise<void> {
+    const room = await loadRoomRow(this.env.DB, connection.roomId);
+    if (!room || room.activeGameId !== gameId) {
+      this.sendError(ws, "game_not_found", "That game is not active in this room.");
+      return;
+    }
+
+    if (typeof sentence !== "string") {
+      this.sendError(ws, "invalid_sentence", "That sentence is not in the predefined chat list.");
+      return;
+    }
+
+    const normalizedSentence = sentence.trim();
+    if (!normalizedSentence || !isPredefinedChatSentence(normalizedSentence)) {
+      this.sendError(ws, "invalid_sentence", "That sentence is not in the predefined chat list.");
+      return;
+    }
+
+    const [state, roster] = await Promise.all([
+      loadActiveGameState(this.env.DB, gameId),
+      loadGamePlayerRoster(this.env.DB, gameId)
+    ]);
+
+    if (!state || roster.length === 0) {
+      this.sendError(ws, "invalid_game_state", "The active game state could not be loaded.");
+      return;
+    }
+
+    if (this.isGamePaused(state)) {
+      this.sendError(ws, "game_paused", "The game is paused until all disconnected players return.");
+      return;
+    }
+
+    if (!isActiveGameplayStatus(state.status)) {
+      this.sendError(ws, "invalid_phase", "The game is not accepting chat messages right now.");
+      return;
+    }
+
+    if (!roster.some((player) => player.userId === connection.userId)) {
+      this.sendError(ws, "forbidden", "Only current game players may use predefined chat.");
+      return;
+    }
+
+    const chatEvent = eventEnvelope("game.predefined-chat.sent", {
+      gameId,
+      senderDisplayName: connection.user.displayName,
+      senderUserId: connection.userId,
+      sentence: normalizedSentence
+    });
+
+    this.broadcastEventToUsers(
+      room.id,
+      new Set(roster.map((player) => player.userId).filter((userId) => userId !== connection.userId)),
+      chatEvent
+    );
+  }
+
   private async isRoomMember(roomId: string, userId: string): Promise<boolean> {
     return (
       (await this.env.DB
@@ -1647,6 +1717,14 @@ export class RoomCoordinator {
   private broadcastEvent(roomId: string, event: RoomServerEvent): void {
     for (const connection of this.connections.values()) {
       if (connection.roomId === roomId) {
+        this.sendEvent(connection.socket, event);
+      }
+    }
+  }
+
+  private broadcastEventToUsers(roomId: string, userIds: Set<string>, event: RoomServerEvent): void {
+    for (const connection of this.connections.values()) {
+      if (connection.roomId === roomId && userIds.has(connection.userId)) {
         this.sendEvent(connection.socket, event);
       }
     }

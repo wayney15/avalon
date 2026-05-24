@@ -39,7 +39,15 @@ function createMockSocket() {
   } as unknown as WebSocket;
 }
 
-function createCoordinator(socket: WebSocket) {
+function createCoordinator(
+  sockets: Array<{
+    connectionId: string;
+    displayName: string;
+    socket: WebSocket;
+    userId: string;
+    username: string;
+  }>
+) {
   const db = {
     prepare(query: string) {
       return {
@@ -77,16 +85,18 @@ function createCoordinator(socket: WebSocket) {
     ROOMS: {} as DurableObjectNamespace
   });
 
-  (coordinator as any).connections.set("connection-1", {
-    roomId: "room-1",
-    socket,
-    user: {
-      displayName: "Host",
-      id: "host-1",
-      username: "host"
-    },
-    userId: "host-1"
-  });
+  for (const socketEntry of sockets) {
+    (coordinator as any).connections.set(socketEntry.connectionId, {
+      roomId: "room-1",
+      socket: socketEntry.socket,
+      user: {
+        displayName: socketEntry.displayName,
+        id: socketEntry.userId,
+        username: socketEntry.username
+      },
+      userId: socketEntry.userId
+    });
+  }
 
   return coordinator;
 }
@@ -157,7 +167,15 @@ describe("RoomCoordinator websocket event handling", () => {
     vi.mocked(persistGameState).mockResolvedValue();
 
     const socket = createMockSocket();
-    const coordinator = createCoordinator(socket);
+    const coordinator = createCoordinator([
+      {
+        connectionId: "connection-1",
+        displayName: "Host",
+        socket,
+        userId: "host-1",
+        username: "host"
+      }
+    ]);
 
     await coordinator.webSocketMessage(
       socket,
@@ -252,7 +270,15 @@ describe("RoomCoordinator websocket event handling", () => {
     vi.mocked(persistGameState).mockResolvedValue();
 
     const socket = createMockSocket();
-    const coordinator = createCoordinator(socket);
+    const coordinator = createCoordinator([
+      {
+        connectionId: "connection-1",
+        displayName: "Host",
+        socket,
+        userId: "host-1",
+        username: "host"
+      }
+    ]);
 
     await coordinator.webSocketMessage(
       socket,
@@ -325,7 +351,15 @@ describe("RoomCoordinator websocket event handling", () => {
     ]);
 
     const socket = createMockSocket();
-    const coordinator = createCoordinator(socket);
+    const coordinator = createCoordinator([
+      {
+        connectionId: "connection-1",
+        displayName: "Host",
+        socket,
+        userId: "host-1",
+        username: "host"
+      }
+    ]);
 
     await coordinator.webSocketMessage(
       socket,
@@ -374,5 +408,213 @@ describe("RoomCoordinator websocket event handling", () => {
         })
       ])
     );
+  });
+
+  it("broadcasts predefined chat to other active players but not the sender", async () => {
+    vi.mocked(loadRoomRow).mockResolvedValue({
+      activeGameId: "game-1",
+      code: "ABCDE",
+      createdAt: "",
+      hostUserId: "host-1",
+      id: "room-1",
+      inviteToken: "invite",
+      name: "Room",
+      status: "locked",
+      updatedAt: ""
+    });
+    vi.mocked(loadActiveGameState).mockResolvedValue({
+      attempt: 1,
+      disconnectedUserIds: [],
+      leaderUserId: "host-1",
+      rejectTracker: 0,
+      round: 1,
+      status: "proposal"
+    });
+    vi.mocked(loadGamePlayerRoster).mockResolvedValue([
+      {
+        displayName: "Host",
+        role: "merlin",
+        seatIndex: 0,
+        team: "good",
+        userId: "host-1"
+      },
+      {
+        displayName: "Player Two",
+        role: "assassin",
+        seatIndex: 1,
+        team: "evil",
+        userId: "player-2"
+      }
+    ]);
+
+    const senderSocket = createMockSocket();
+    const recipientSocket = createMockSocket();
+    const spectatorSocket = createMockSocket();
+    const coordinator = createCoordinator([
+      {
+        connectionId: "connection-1",
+        displayName: "Host",
+        socket: senderSocket,
+        userId: "host-1",
+        username: "host"
+      },
+      {
+        connectionId: "connection-2",
+        displayName: "Player Two",
+        socket: recipientSocket,
+        userId: "player-2",
+        username: "player2"
+      },
+      {
+        connectionId: "connection-3",
+        displayName: "Spectator",
+        socket: spectatorSocket,
+        userId: "spectator-1",
+        username: "spectator"
+      }
+    ]);
+
+    await coordinator.webSocketMessage(
+      senderSocket,
+      JSON.stringify({
+        payload: { gameId: "game-1", sentence: "66666" },
+        type: "game.send-predefined-chat"
+      })
+    );
+
+    expect(appendGameEvent).not.toHaveBeenCalled();
+    expect(vi.mocked(senderSocket.send).mock.calls).toHaveLength(0);
+    expect(vi.mocked(spectatorSocket.send).mock.calls).toHaveLength(0);
+
+    const recipientEvents = vi
+      .mocked(recipientSocket.send)
+      .mock.calls.map(([message]) => JSON.parse(String(message)));
+    expect(recipientEvents).toEqual([
+      expect.objectContaining({
+        payload: {
+          gameId: "game-1",
+          senderDisplayName: "Host",
+          senderUserId: "host-1",
+          sentence: "66666"
+        },
+        type: "game.predefined-chat.sent"
+      })
+    ]);
+  });
+
+  it("rejects predefined chat from non-players", async () => {
+    vi.mocked(loadRoomRow).mockResolvedValue({
+      activeGameId: "game-1",
+      code: "ABCDE",
+      createdAt: "",
+      hostUserId: "host-1",
+      id: "room-1",
+      inviteToken: "invite",
+      name: "Room",
+      status: "locked",
+      updatedAt: ""
+    });
+    vi.mocked(loadActiveGameState).mockResolvedValue({
+      attempt: 1,
+      disconnectedUserIds: [],
+      leaderUserId: "host-1",
+      rejectTracker: 0,
+      round: 1,
+      status: "proposal"
+    });
+    vi.mocked(loadGamePlayerRoster).mockResolvedValue([
+      {
+        displayName: "Host",
+        role: "merlin",
+        seatIndex: 0,
+        team: "good",
+        userId: "host-1"
+      },
+      {
+        displayName: "Player Two",
+        role: "assassin",
+        seatIndex: 1,
+        team: "evil",
+        userId: "player-2"
+      }
+    ]);
+
+    const spectatorSocket = createMockSocket();
+    const coordinator = createCoordinator([
+      {
+        connectionId: "connection-3",
+        displayName: "Spectator",
+        socket: spectatorSocket,
+        userId: "spectator-1",
+        username: "spectator"
+      }
+    ]);
+
+    await coordinator.webSocketMessage(
+      spectatorSocket,
+      JSON.stringify({
+        payload: { gameId: "game-1", sentence: "66666" },
+        type: "game.send-predefined-chat"
+      })
+    );
+
+    const spectatorEvents = vi
+      .mocked(spectatorSocket.send)
+      .mock.calls.map(([message]) => JSON.parse(String(message)));
+    expect(spectatorEvents).toEqual([
+      expect.objectContaining({
+        payload: {
+          code: "forbidden",
+          message: "Only current game players may use predefined chat."
+        },
+        type: "error"
+      })
+    ]);
+  });
+
+  it("rejects predefined chat with a malformed sentence payload", async () => {
+    vi.mocked(loadRoomRow).mockResolvedValue({
+      activeGameId: "game-1",
+      code: "ABCDE",
+      createdAt: "",
+      hostUserId: "host-1",
+      id: "room-1",
+      inviteToken: "invite",
+      name: "Room",
+      status: "locked",
+      updatedAt: ""
+    });
+
+    const senderSocket = createMockSocket();
+    const coordinator = createCoordinator([
+      {
+        connectionId: "connection-1",
+        displayName: "Host",
+        socket: senderSocket,
+        userId: "host-1",
+        username: "host"
+      }
+    ]);
+
+    await coordinator.webSocketMessage(
+      senderSocket,
+      JSON.stringify({
+        payload: { gameId: "game-1", sentence: { text: "66666" } },
+        type: "game.send-predefined-chat"
+      })
+    );
+
+    const senderEvents = vi
+      .mocked(senderSocket.send)
+      .mock.calls.map(([message]) => JSON.parse(String(message)));
+    expect(senderEvents).toEqual([
+      expect.objectContaining({
+        payload: {
+          code: "invalid_sentence",
+          message: "That sentence is not in the predefined chat list."
+        },
+        type: "error"
+      })
+    ]);
   });
 });

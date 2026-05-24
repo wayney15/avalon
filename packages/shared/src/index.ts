@@ -5,4 +5,5 @@ export interface ApiHealth {
 
 export * from "./auth";
 export * from "./game";
+export * from "./predefined-chat";
 export * from "./room";
