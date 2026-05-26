@@ -8,6 +8,7 @@ import mordredImage from "../asset/Mordred.png";
 import oberonImage from "../asset/Oberon.png";
 import percivalImage from "../asset/Percival.png";
 import predefinedSentencesText from "../asset/sentence.txt?raw";
+import { reconcileLiveActivityFromSnapshot } from "./live-activity";
 import type {
   ActiveGameView,
   AuthErrorResponse,
@@ -20,6 +21,7 @@ import type {
   QuestVote,
   RecentRoomResponse,
   Role,
+  RoomActivityItem,
   RoomClientEvent,
   RoomDetailResponse,
   RoomServerEvent,
@@ -64,12 +66,6 @@ interface ReplayState {
   error: string | null;
 }
 
-interface LiveActivityItem {
-  id: string;
-  occurredAt: string;
-  message: string;
-}
-
 interface ReplayEntry {
   id: string;
   message: string;
@@ -78,6 +74,11 @@ interface ReplayEntry {
 interface ChatPopupItem {
   id: string;
   message: string;
+}
+
+interface WinnerPopupState {
+  message: string;
+  winner: "good" | "evil" | null;
 }
 
 const API_BASE = resolveApiBase();
@@ -204,13 +205,13 @@ function summarizeRoomEvent(
 ): string | null {
   switch (event.type) {
     case "room.host.updated":
-      return `${resolveName(event.payload.hostUserId)} is now host.`;
+      return `${resolveName(event.payload.hostUserId)} 现在是房主。`;
     case "room.locked":
-      return "Room locked for an active game.";
+      return "房间已锁定，游戏进行中。";
     case "room.unlocked":
-      return "Room returned to lobby state.";
+      return "房间已回到大厅状态。";
     case "game.team.proposed":
-      return `${resolveName(event.payload.leaderUserId)} proposed ${event.payload.teamUserIds.map(resolveName).join(", ")}.`;
+      return `${resolveName(event.payload.leaderUserId)} 提议队伍：${event.payload.teamUserIds.map(resolveName).join("、")}。`;
     case "game.team.vote.revealed": {
       const approvedBy = event.payload.votes
         .filter((entry) => entry.vote === "approve")
@@ -221,25 +222,25 @@ function summarizeRoomEvent(
         .map((entry) => resolveName(entry.userId))
         .join(" ");
       return event.payload.approved
-        ? `Team approved.\nApproved with ✓:${approvedBy || "none"}\nRejected with ✗:${rejectedBy || "none"}`
-        : `Team rejected.\nApproved with ✓:${approvedBy || "none"}\nRejected with ✗:${rejectedBy || "none"}`;
+        ? `队伍表决通过。\n赞成 ✓：${approvedBy || "无人"}\n反对 ✗：${rejectedBy || "无人"}`
+        : `队伍表决未通过。\n赞成 ✓：${approvedBy || "无人"}\n反对 ✗：${rejectedBy || "无人"}`;
     }
     case "game.quest.result.revealed":
-      return `Quest ${event.payload.round} ${event.payload.winner === "good" ? "succeeded" : "failed"} with ${event.payload.failCount} fail card${event.payload.failCount === 1 ? "" : "s"}.`;
+      return `第 ${event.payload.round} 次任务${event.payload.winner === "good" ? "成功" : "失败"}，出现 ${event.payload.failCount} 张失败票。`;
     case "game.paused":
-      return `${resolveName(event.payload.disconnectedUserId)} disconnected. Game paused.`;
+      return `${resolveName(event.payload.disconnectedUserId)} 已断线，游戏暂停。`;
     case "game.resumed":
-      return "All required players returned. Game resumed.";
+      return "所有必要玩家已返回，游戏继续。";
     case "game.assassination.started":
-      return `${resolveName(event.payload.assassinUserId)} is choosing an assassination target.`;
+      return `${resolveName(event.payload.assassinUserId)} 正在选择刺杀目标。`;
     case "game.finished":
       return gameResultNotice(event.payload.winner);
     case "game.terminated":
       return event.payload.reason === "host_ended_game"
-        ? "Host ended the current game."
-        : "Game terminated after a host force-remove.";
+        ? "房主结束了当前游戏。"
+        : "房主强制移除掉线玩家后，游戏已终止。";
     case "history.game.available":
-      return "A completed game was added to room history.";
+      return "一局已完成的游戏已加入历史记录。";
     case "error":
       return event.payload.message;
     default:
@@ -311,7 +312,102 @@ function teamLabel(secretState: ViewerSecretState | null): string {
     return "观战";
   }
 
-  return secretState.team === "good" ? "Good" : "Evil";
+  return secretState.team === "good" ? "好人" : "坏人";
+}
+
+function teamName(team: "good" | "evil" | null | undefined): string {
+  if (team === "good") {
+    return "好人";
+  }
+
+  if (team === "evil") {
+    return "坏人";
+  }
+
+  return "未知";
+}
+
+function visibilityLabel(visibility: "open" | "locked"): string {
+  return visibility === "open" ? "开放" : "锁定";
+}
+
+function socketStatusLabel(status: SocketStatus): string {
+  switch (status) {
+    case "connected":
+      return "已连接";
+    case "connecting":
+      return "连接中";
+    case "offline":
+      return "离线";
+    default:
+      return status;
+  }
+}
+
+function gameStatusLabel(status: ActiveGameView["status"]): string {
+  switch (status) {
+    case "night":
+      return "夜晚";
+    case "proposal":
+      return "提名";
+    case "team-vote":
+      return "队伍表决";
+    case "quest-vote":
+      return "任务投票";
+    case "assassination":
+      return "刺杀";
+    case "finished":
+      return "已结束";
+    case "unfinished":
+      return "未完成";
+    case "lobby":
+      return "大厅";
+    default:
+      return status;
+  }
+}
+
+function roomEventTypeLabel(type: RoomServerEvent["type"]): string {
+  switch (type) {
+    case "room.snapshot":
+      return "房间快照";
+    case "room.presence.updated":
+      return "在线状态更新";
+    case "room.host.updated":
+      return "房主变更";
+    case "room.seating.updated":
+      return "座位更新";
+    case "room.locked":
+      return "房间锁定";
+    case "room.unlocked":
+      return "房间解锁";
+    case "game.phase.changed":
+      return "阶段变更";
+    case "game.team.proposed":
+      return "队伍提议";
+    case "game.team.vote.revealed":
+      return "队伍表决结果";
+    case "game.quest.result.revealed":
+      return "任务结果";
+    case "game.paused":
+      return "游戏暂停";
+    case "game.resumed":
+      return "游戏继续";
+    case "game.assassination.started":
+      return "刺杀开始";
+    case "game.predefined-chat.sent":
+      return "快捷发言";
+    case "game.finished":
+      return "游戏结束";
+    case "game.terminated":
+      return "游戏终止";
+    case "history.game.available":
+      return "历史记录更新";
+    case "error":
+      return "错误";
+    default:
+      return type;
+  }
 }
 
 function missionTrack(results: Array<"success" | "fail">): string {
@@ -337,7 +433,7 @@ function formatTeamVoteBreakdown(
 ): string {
   const approvedBy = votes.filter((entry) => entry.vote === "approve").map((entry) => resolveName(entry.userId));
   const rejectedBy = votes.filter((entry) => entry.vote === "reject").map((entry) => resolveName(entry.userId));
-  return `Approved: ${approvedBy.join(", ") || "none"}. Rejected: ${rejectedBy.join(", ") || "none"}.`;
+  return `赞成：${approvedBy.join("、") || "无人"}。反对：${rejectedBy.join("、") || "无人"}。`;
 }
 
 function buildReplayEntries(
@@ -371,7 +467,7 @@ function buildReplayEntries(
       lastProposal = payload;
       entries.push({
         id: event.id,
-        message: `Leader ${resolveName(payload.leaderUserId)} proposed ${payload.teamUserIds.map(resolveName).join(", ")}.`
+        message: `队长 ${resolveName(payload.leaderUserId)} 提议队伍：${payload.teamUserIds.map(resolveName).join("、")}。`
       });
       continue;
     }
@@ -394,7 +490,7 @@ function buildReplayEntries(
       if (!payload.approved && lastProposal && lastProposal.round === payload.round) {
         entries.push({
           id: event.id,
-          message: `Leader ${resolveName(lastProposal.leaderUserId)}'s team was rejected. ${formatTeamVoteBreakdown(payload.votes, resolveName)}`
+          message: `队长 ${resolveName(lastProposal.leaderUserId)} 的队伍未通过。${formatTeamVoteBreakdown(payload.votes, resolveName)}`
         });
       }
       continue;
@@ -412,7 +508,7 @@ function buildReplayEntries(
         lastVote?.round === payload.round ? ` ${formatTeamVoteBreakdown(lastVote.votes, resolveName)}` : "";
       entries.push({
         id: event.id,
-        message: `Leader ${leaderUserId ? resolveName(leaderUserId) : "unknown"} sent ${teamUserIds.map(resolveName).join(", ")}. Quest ${payload.round} ${payload.winner === "good" ? "succeeded" : "failed"} with ${payload.failCount} fail card${payload.failCount === 1 ? "" : "s"}.${voteBreakdown}`
+        message: `队长 ${leaderUserId ? resolveName(leaderUserId) : "未知"} 派出 ${teamUserIds.map(resolveName).join("、")}。第 ${payload.round} 次任务${payload.winner === "good" ? "成功" : "失败"}，出现 ${payload.failCount} 张失败票。${voteBreakdown}`
       });
       continue;
     }
@@ -455,14 +551,14 @@ function withActiveGame(
 
 function gameResultNotice(winner: "good" | "evil" | null): string {
   if (winner === "good") {
-    return "Game finished. Good wins.";
+    return "游戏结束，好人胜利。";
   }
 
   if (winner === "evil") {
-    return "Game finished. Evil wins.";
+    return "游戏结束，坏人胜利。";
   }
 
-  return "Game finished.";
+  return "游戏结束。";
 }
 
 export function App() {
@@ -497,7 +593,7 @@ export function App() {
   const [screenNotice, setScreenNotice] = useState<string | null>(null);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("offline");
   const [lastEvent, setLastEvent] = useState<RoomServerEvent | null>(null);
-  const [liveActivity, setLiveActivity] = useState<LiveActivityItem[]>([]);
+  const [liveActivity, setLiveActivity] = useState<RoomActivityItem[]>([]);
   const [isSecretRevealActive, setIsSecretRevealActive] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
@@ -506,6 +602,8 @@ export function App() {
   const [socketReconnectNonce, setSocketReconnectNonce] = useState(0);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [chatPopups, setChatPopups] = useState<ChatPopupItem[]>([]);
+  const [winnerPopup, setWinnerPopup] = useState<WinnerPopupState | null>(null);
+  const [roomDetailsOpen, setRoomDetailsOpen] = useState(false);
 
   const viewerRole = inferViewerPresenceRole(snapshot, session?.user.id ?? "");
   const isHost = viewerRole === "host";
@@ -560,6 +658,8 @@ export function App() {
     snapshot.viewerSecretState.role === "assassin";
   const gamePaused = Boolean(activeGame) && disconnectedPlayers.length > 0;
   const canUsePredefinedChat = isPlayer && isGameInProgress && !gamePaused;
+  const canToggleRoomDetails = isGameInProgress && Boolean(activeRoom);
+  const roomDetailsVisible = !isGameInProgress || roomDetailsOpen;
   const activeChatPopup = chatPopups[0] ?? null;
   const showLiveActivity = Boolean(activeGame) || liveActivity.length > 0;
 
@@ -582,6 +682,7 @@ export function App() {
       setLiveActivity([]);
       setChatMenuOpen(false);
       setChatPopups([]);
+      setWinnerPopup(null);
       saveSession(null);
       saveLastRoomId(null);
       return;
@@ -610,7 +711,7 @@ export function App() {
         }
 
         setSession(null);
-        setScreenError("Your session is no longer valid. Sign in again.");
+        setScreenError("当前登录状态已失效，请重新登录。");
       });
 
     return () => {
@@ -669,6 +770,7 @@ export function App() {
       setLiveActivity([]);
       setChatMenuOpen(false);
       setChatPopups([]);
+      setWinnerPopup(null);
       return;
     }
 
@@ -705,6 +807,7 @@ export function App() {
 
       if (parsed.type === "room.snapshot") {
         setSnapshot(parsed.payload);
+        setLiveActivity((current) => reconcileLiveActivityFromSnapshot(current, parsed.payload));
         syncRoomSummaryFromSnapshot(parsed.payload);
         if (parsed.payload.activeGame?.status !== "assassination") {
           setRoomForms((current) => ({ ...current, selectedAssassinationTarget: "" }));
@@ -802,8 +905,8 @@ export function App() {
         );
         setScreenNotice(
           parsed.payload.approved
-            ? "Team approved. Quest voting is open."
-            : `Team rejected. Reject track is now ${parsed.payload.rejectTracker}.`
+            ? "队伍表决通过，进入任务投票。"
+            : `队伍表决未通过，当前连续否决次数为 ${parsed.payload.rejectTracker}。`
         );
         return;
       }
@@ -826,18 +929,18 @@ export function App() {
           )
         );
         setScreenNotice(
-          `Quest ${parsed.payload.round} ${parsed.payload.winner === "good" ? "succeeded" : "failed"} (${parsed.payload.successCount} success, ${parsed.payload.failCount} fail).`
+          `第 ${parsed.payload.round} 次任务${parsed.payload.winner === "good" ? "成功" : "失败"}（成功票 ${parsed.payload.successCount}，失败票 ${parsed.payload.failCount}）。`
         );
         return;
       }
 
       if (parsed.type === "game.paused") {
-        setScreenNotice(`${playerLookup.get(parsed.payload.disconnectedUserId) ?? "A player"} disconnected. Game paused.`);
+        setScreenNotice(`${playerLookup.get(parsed.payload.disconnectedUserId) ?? "有玩家"} 已断线，游戏暂停。`);
         return;
       }
 
       if (parsed.type === "game.resumed") {
-        setScreenNotice("All required players are back. Game resumed.");
+        setScreenNotice("所有必要玩家都已返回，游戏继续。");
         return;
       }
 
@@ -856,7 +959,7 @@ export function App() {
               : game
           )
         );
-        setScreenNotice("Assassination phase started.");
+        setScreenNotice("刺杀阶段开始。");
         return;
       }
 
@@ -882,7 +985,10 @@ export function App() {
               : game
           )
         );
-        setScreenNotice(gameResultNotice(parsed.payload.winner));
+        setWinnerPopup({
+          message: gameResultNotice(parsed.payload.winner),
+          winner: parsed.payload.winner
+        });
         return;
       }
 
@@ -899,8 +1005,8 @@ export function App() {
         );
         setScreenNotice(
           parsed.payload.reason === "host_ended_game"
-            ? "The host ended the current game."
-            : "Game terminated after the host force-removed a disconnected player."
+            ? "房主结束了当前游戏。"
+            : "房主强制移除掉线玩家后，游戏已终止。"
         );
         return;
       }
@@ -948,7 +1054,7 @@ export function App() {
     });
 
     socket.addEventListener("error", () => {
-      setScreenError("The room connection failed.");
+      setScreenError("房间连接失败。");
     });
 
     saveLastRoomId(activeRoom.id);
@@ -995,6 +1101,10 @@ export function App() {
     }
   }, [canUsePredefinedChat]);
 
+  useEffect(() => {
+    setRoomDetailsOpen(false);
+  }, [activeGame?.id, isGameInProgress]);
+
   function syncRoomSummaryFromSnapshot(nextSnapshot: RoomSnapshotEventPayload): void {
     setActiveRoom((current) =>
       current
@@ -1039,7 +1149,7 @@ export function App() {
       const response = await requestJson<UserHistoryResponse>("/api/history/games", { method: "GET" }, session.token);
       setHistoryGames(response.games);
     } catch (error) {
-      setScreenError(error instanceof Error ? error.message : "Unable to load your game history.");
+      setScreenError(error instanceof Error ? error.message : "无法加载你的对局历史。");
     } finally {
       setHistorySelectionLoading(false);
     }
@@ -1058,7 +1168,7 @@ export function App() {
     } catch (error) {
       setReplay({
         data: null,
-        error: error instanceof Error ? error.message : "Unable to load replay.",
+        error: error instanceof Error ? error.message : "无法加载回放。",
         gameId,
         loading: false
       });
@@ -1118,7 +1228,7 @@ export function App() {
     }
 
     if (!options?.silent) {
-      setScreenError("No room was found to rejoin.");
+      setScreenError("没有找到可重新加入的房间。");
     }
 
     return false;
@@ -1138,9 +1248,9 @@ export function App() {
       const nextSession = await requestJson<AuthSession>(path, { body, method: "POST" });
       setSession(nextSession);
       setAuthForm({ displayName: "", password: "", username: "" });
-      setScreenNotice(authMode === "signup" ? "Account created." : "Signed in.");
+      setScreenNotice(authMode === "signup" ? "账号已创建。" : "登录成功。");
     } catch (error) {
-      setScreenError(error instanceof Error ? error.message : "Authentication failed.");
+      setScreenError(error instanceof Error ? error.message : "认证失败。");
     } finally {
       setIsBusy(false);
     }
@@ -1166,9 +1276,9 @@ export function App() {
       setActiveRoom(response.room);
       setLastInviteUrl(response.inviteUrl);
       setRoomForms((current) => ({ ...current, roomName: "" }));
-      setScreenNotice(`Room created. Invite link: ${response.inviteUrl}`);
+      setScreenNotice(`房间已创建。邀请链接：${response.inviteUrl}`);
     } catch (error) {
-      setScreenError(error instanceof Error ? error.message : "Unable to create room.");
+      setScreenError(error instanceof Error ? error.message : "无法创建房间。");
     } finally {
       setIsBusy(false);
     }
@@ -1201,9 +1311,9 @@ export function App() {
       } else {
         setLastInviteUrl(null);
       }
-      setScreenNotice(joinForm.asSpectator ? "Joined as spectator." : "Joined room.");
+      setScreenNotice(joinForm.asSpectator ? "已作为观战者加入。" : "已加入房间。");
     } catch (error) {
-      setScreenError(error instanceof Error ? error.message : "Unable to join room.");
+      setScreenError(error instanceof Error ? error.message : "无法加入房间。");
     } finally {
       setIsBusy(false);
     }
@@ -1216,7 +1326,7 @@ export function App() {
     try {
       const rejoined = await restoreRoomSession();
       if (rejoined) {
-        setScreenNotice("Rejoined room.");
+        setScreenNotice("已重新加入房间。");
       }
     } finally {
       setIsBusy(false);
@@ -1227,7 +1337,7 @@ export function App() {
     clearFeedback();
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setScreenError("The live room connection is not open.");
+      setScreenError("房间实时连接尚未打开。");
       return false;
     }
 
@@ -1250,6 +1360,7 @@ export function App() {
     setLiveActivity([]);
     setChatMenuOpen(false);
     setChatPopups([]);
+    setWinnerPopup(null);
     setLastInviteUrl(null);
     saveLastRoomId(null);
   }
@@ -1273,7 +1384,7 @@ export function App() {
       return;
     }
 
-    if (!window.confirm("End the current game and return the room to the lobby?")) {
+    if (!window.confirm("确认结束当前游戏并返回大厅吗？")) {
       return;
     }
 
@@ -1344,8 +1455,8 @@ export function App() {
       return;
     }
 
-    const targetName = playerLookup.get(roomForms.selectedAssassinationTarget) ?? "this player";
-    if (!window.confirm(`Confirm assassination target: ${targetName}?`)) {
+    const targetName = playerLookup.get(roomForms.selectedAssassinationTarget) ?? "该玩家";
+    if (!window.confirm(`确认将刺杀目标设为：${targetName}？`)) {
       return;
     }
 
@@ -1437,19 +1548,30 @@ export function App() {
         <div className="top-bar-main">
           <div className="top-bar-status">
             <span className={`status-dot status-${socketStatus}`} />
-            <strong>{session ? session.user.displayName : "Signed out"}</strong>
-            <span className="top-bar-room">{activeRoom ? activeRoom.code : "No room"}</span>
+            <strong>{session ? session.user.displayName : "未登录"}</strong>
+            <span className="top-bar-room">{activeRoom ? activeRoom.code : "无房间"}</span>
           </div>
-          {canUsePredefinedChat ? (
+          {canUsePredefinedChat || canToggleRoomDetails ? (
             <div className="top-bar-actions">
-              <button
-                className={chatMenuOpen ? "ghost-button active-top-bar-button" : "ghost-button"}
-                onClick={() => setChatMenuOpen((current) => !current)}
-                type="button"
-              >
-                Chat
-              </button>
-              {chatMenuOpen ? (
+              {canToggleRoomDetails ? (
+                <button
+                  className={roomDetailsOpen ? "ghost-button active-top-bar-button" : "ghost-button"}
+                  onClick={() => setRoomDetailsOpen((current) => !current)}
+                  type="button"
+                >
+                  房间详情
+                </button>
+              ) : null}
+              {canUsePredefinedChat ? (
+                <button
+                  className={chatMenuOpen ? "ghost-button active-top-bar-button" : "ghost-button"}
+                  onClick={() => setChatMenuOpen((current) => !current)}
+                  type="button"
+                >
+                  快捷发言
+                </button>
+              ) : null}
+              {canUsePredefinedChat && chatMenuOpen ? (
                 <div className="chat-menu" role="menu">
                   <ul className="chat-menu-list">
                     {PREDEFINED_CHAT_SENTENCES.map((sentence) => (
@@ -1478,8 +1600,8 @@ export function App() {
         <section className="panel auth-panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Authentication</p>
-              <h2>{authMode === "signup" ? "Create account" : "Sign in"}</h2>
+              <p className="eyebrow">账号</p>
+              <h2>{authMode === "signup" ? "创建账号" : "登录"}</h2>
             </div>
             <div className="segmented">
               <button
@@ -1487,21 +1609,21 @@ export function App() {
                 onClick={() => setAuthMode("login")}
                 type="button"
               >
-                Login
+                登录
               </button>
               <button
                 className={authMode === "signup" ? "chip active" : "chip"}
                 onClick={() => setAuthMode("signup")}
                 type="button"
               >
-                Signup
+                注册
               </button>
             </div>
           </div>
 
           <div className="form-grid">
             <label>
-              <span>Username</span>
+              <span>用户名</span>
               <input
                 autoComplete="username"
                 onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))}
@@ -1511,21 +1633,21 @@ export function App() {
             </label>
             {authMode === "signup" ? (
               <label>
-                <span>Display name</span>
+                <span>显示名称</span>
                 <input
                   autoComplete="nickname"
                   onChange={(event) => setAuthForm((current) => ({ ...current, displayName: event.target.value }))}
-                  placeholder="Arthur"
+                placeholder="亚瑟"
                   value={authForm.displayName}
                 />
               </label>
             ) : null}
             <label>
-              <span>Password</span>
+                <span>密码</span>
               <input
                 autoComplete={authMode === "signup" ? "new-password" : "current-password"}
                 onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
-                placeholder="At least 8 characters"
+                placeholder="至少 8 个字符"
                 type="password"
                 value={authForm.password}
               />
@@ -1533,7 +1655,7 @@ export function App() {
           </div>
 
           <button disabled={isBusy} onClick={() => void handleAuthSubmit()} type="button">
-            {authMode === "signup" ? "Create account" : "Sign in"}
+            {authMode === "signup" ? "创建账号" : "登录"}
           </button>
         </section>
       ) : (
@@ -1542,8 +1664,8 @@ export function App() {
             <section className="panel setup-panel">
               <div className="panel-header">
                 <div>
-                  <p className="eyebrow">Room access</p>
-                  <h2>Create or join</h2>
+                  <p className="eyebrow">房间</p>
+                  <h2>创建或加入</h2>
                 </div>
                 <button
                   className="ghost-button"
@@ -1553,30 +1675,30 @@ export function App() {
                   }}
                   type="button"
                 >
-                  Sign out
+                  退出登录
                 </button>
               </div>
 
               <div className="split-grid">
                 <div className="card">
-                  <h3>Create room</h3>
+                  <h3>创建房间</h3>
                   <label>
-                    <span>Room name</span>
+                    <span>房间名称</span>
                     <input
                       onChange={(event) => setRoomForms((current) => ({ ...current, roomName: event.target.value }))}
-                      placeholder="Friday Avalon"
+                      placeholder="周五阿瓦隆"
                       value={roomForms.roomName}
                     />
                   </label>
                   <button disabled={isBusy} onClick={() => void handleCreateRoom()} type="button">
-                    Create room
+                    创建房间
                   </button>
                 </div>
 
                 <div className="card">
-                  <h3>Join room</h3>
+                  <h3>加入房间</h3>
                   <label>
-                    <span>Room code</span>
+                    <span>房间代码</span>
                     <input
                       onChange={(event) => setJoinForm((current) => ({ ...current, roomCode: event.target.value.toUpperCase() }))}
                       placeholder="K7M4Q"
@@ -1584,7 +1706,7 @@ export function App() {
                     />
                   </label>
                   <label>
-                    <span>Invite token</span>
+                    <span>邀请令牌</span>
                     <input
                       onChange={(event) => setJoinForm((current) => ({ ...current, inviteToken: event.target.value }))}
                       placeholder="inv_..."
@@ -1597,33 +1719,33 @@ export function App() {
                       onChange={(event) => setJoinForm((current) => ({ ...current, asSpectator: event.target.checked }))}
                       type="checkbox"
                     />
-                    <span>Join as spectator</span>
+                    <span>以观战者身份加入</span>
                   </label>
                   <button disabled={isBusy} onClick={() => void handleJoinRoom()} type="button">
-                    Join room
+                    加入房间
                   </button>
                   <button className="ghost-button" disabled={isBusy} onClick={() => void handleRejoinRoom()} type="button">
-                    Rejoin
+                    重新加入
                   </button>
                 </div>
 
                 <div className="card">
-                  <h3>History</h3>
+                  <h3>历史记录</h3>
                   {!replay.loading && !replay.error && !replay.data && !historySelectionOpen ? (
                     <>
-                      <p className="small-copy">Review any finished game from your signed-in history.</p>
+                      <p className="small-copy">查看你账号下已结束的任意对局。</p>
                       <button onClick={() => void openHistorySelection()} type="button">
-                        Select game
+                        选择对局
                       </button>
                     </>
                   ) : null}
                   {historySelectionOpen ? (
                     <>
-                      <p className="small-copy">Choose one of your finished games.</p>
+                      <p className="small-copy">从已结束的对局中选择一局。</p>
                       <ul className="history-list">
-                        {historySelectionLoading ? <li className="empty">Loading finished games.</li> : null}
+                        {historySelectionLoading ? <li className="empty">正在加载已结束对局。</li> : null}
                         {!historySelectionLoading && historyGames.length === 0 ? (
-                          <li className="empty">No finished games found for your account.</li>
+                          <li className="empty">你的账号下暂无已结束对局。</li>
                         ) : null}
                         {historyGames.map((game) => (
                           <li key={game.id}>
@@ -1633,23 +1755,23 @@ export function App() {
                               type="button"
                             >
                               <strong>{game.roomName}</strong>
-                              <span>{game.roomCode} • {game.winner ? `${game.winner} wins` : "finished"}</span>
+                              <span>{game.roomCode} • {game.winner ? `${teamName(game.winner)}胜利` : "已结束"}</span>
                             </button>
                           </li>
                         ))}
                       </ul>
                     </>
                   ) : null}
-                  {replay.loading ? <p className="empty">Loading replay.</p> : null}
+                  {replay.loading ? <p className="empty">正在加载回放。</p> : null}
                   {replay.error ? <p className="banner banner-error">{replay.error}</p> : null}
                   {replay.data ? (
                     <>
                       <div className="replay-head">
                         <button onClick={() => void openHistorySelection()} type="button">
-                          Select a new game
+                          选择另一局
                         </button>
                         <p className="meta-line">
-                          Winner {replay.data.game.winner ?? "none"} • {replayEntries.length} replay entries
+                          胜方：{replay.data.game.winner ? teamName(replay.data.game.winner) : "无"} • {replayEntries.length} 条回放记录
                         </p>
                       </div>
                       <ul className="replay-list">
@@ -1671,59 +1793,62 @@ export function App() {
               <section className="panel room-panel">
                 <div className="panel-header">
                   <div>
-                    <p className="eyebrow">Live room</p>
+                    <p className="eyebrow">实时房间</p>
                     <h2>{activeRoom.name}</h2>
                     <p className="meta-line">
-                      Code {activeRoom.code} • {snapshot?.room.visibility ?? activeRoom.visibility} • {socketStatus}
+                      房间代码 {activeRoom.code} • {visibilityLabel(snapshot?.room.visibility ?? activeRoom.visibility)} • {socketStatusLabel(socketStatus)}
                     </p>
                   </div>
                   <div className="panel-actions">
                     <button className="ghost-button" onClick={() => void handleLeaveRoom()} type="button">
-                      Close room view
+                      离开房间视图
                     </button>
                   </div>
                 </div>
 
                 {snapshot ? (
                   <>
-                    <div className="summary-strip">
-                      <div className="summary-item">
-                        <span>Players</span>
-                        <strong>{snapshot.players.length}</strong>
+                    {roomDetailsVisible ? (
+                      <div className="summary-strip">
+                        <div className="summary-item">
+                          <span>玩家</span>
+                          <strong>{snapshot.players.length}</strong>
+                        </div>
+                        <div className="summary-item">
+                          <span>观战者</span>
+                          <strong>{snapshot.spectators.length}</strong>
+                        </div>
+                        <div className="summary-item">
+                          <span>身份</span>
+                          <strong>{viewerRole ? presenceRoleLabel(viewerRole) : "旁观者"}</strong>
+                        </div>
+                        <div className="summary-item">
+                          <span>邀请链接</span>
+                          <strong className="invite-line">{lastInviteUrl ?? "创建房间后可用"}</strong>
+                        </div>
                       </div>
-                      <div className="summary-item">
-                        <span>Spectators</span>
-                        <strong>{snapshot.spectators.length}</strong>
-                      </div>
-                      <div className="summary-item">
-                        <span>Role</span>
-                        <strong>{viewerRole ?? "viewer"}</strong>
-                      </div>
-                      <div className="summary-item">
-                        <span>Invite</span>
-                        <strong className="invite-line">{lastInviteUrl ?? "Available after room creation"}</strong>
-                      </div>
-                    </div>
+                    ) : null}
 
                     {gamePaused ? (
                       <p className="banner banner-warning">
-                        Game paused: {disconnectedPlayers.map((player) => player.displayName).join(", ")} disconnected.
+                        游戏暂停：{disconnectedPlayers.map((player) => player.displayName).join("、")} 已断线。
                       </p>
                     ) : null}
 
-                    <div className="split-grid">
+                    {roomDetailsVisible ? (
+                      <div className="split-grid">
                       <div className="card">
                         <div className="card-header">
-                          <h3>Players</h3>
+                          <h3>玩家</h3>
                           <div className="inline-actions">
                             {viewerRole === "spectator" ? (
                               <button className="ghost-button" onClick={() => joinAs("player")} type="button">
-                                Become player
+                                加入玩家席
                               </button>
                             ) : null}
                             {viewerRole !== "spectator" && !isHost ? (
                               <button className="ghost-button" onClick={() => joinAs("spectator")} type="button">
-                                Become spectator
+                                切换为观战
                               </button>
                             ) : null}
                           </div>
@@ -1735,7 +1860,7 @@ export function App() {
                                 <strong>{player.displayName}</strong>
                                 <p>
                                   {presenceRoleLabel(player.role)}
-                                  {!player.connected ? " • disconnected" : ""}
+                                  {!player.connected ? " • 已断线" : ""}
                                 </p>
                               </div>
                               {isHost && player.userId !== currentUserId ? (
@@ -1751,11 +1876,11 @@ export function App() {
                                       }
                                       type="button"
                                     >
-                                      Transfer host
+                                      转移房主
                                     </button>
                                   ) : null}
                                   <button className="ghost-button danger" onClick={() => kickOrForceRemove(player.userId)} type="button">
-                                    {snapshot.lockStatus === "open" ? "Kick" : "Force remove"}
+                                    {snapshot.lockStatus === "open" ? "移出房间" : "强制移除"}
                                   </button>
                                 </div>
                               ) : null}
@@ -1765,118 +1890,121 @@ export function App() {
                       </div>
 
                       <div className="card">
-                        <h3>Spectators</h3>
+                        <h3>观战者</h3>
                         <ul className="presence-list">
-                          {snapshot.spectators.length === 0 ? <li className="empty">No spectators.</li> : null}
+                          {snapshot.spectators.length === 0 ? <li className="empty">暂无观战者。</li> : null}
                           {snapshot.spectators.map((spectator) => (
                             <li key={spectator.userId}>
                               <div>
                                 <strong>{spectator.displayName}</strong>
-                                <p>{spectator.connected ? "watching live" : "offline"}</p>
+                                <p>{spectator.connected ? "正在观战" : "离线"}</p>
                               </div>
                             </li>
                           ))}
                         </ul>
                       </div>
-                    </div>
+                      </div>
+                    ) : null}
 
                     <div className="split-grid">
                       <div className="card">
-                        <h3>Seats</h3>
+                        <h3>座位</h3>
                         <ol className="seat-list">
                           {seatedPlayers.map((seat) => (
                             <li key={`${seat.seat}-${seat.userId}`}>
                               <span className="seat-number">{seat.seat + 1}</span>
                               <div>
                                 <strong>{seat.displayName}</strong>
-                                <p>{seat.connected ? "ready" : "offline"}</p>
+                                <p>{seat.connected ? "已就绪" : "离线"}</p>
                               </div>
                             </li>
                           ))}
                         </ol>
                       </div>
 
-                      <div className="card">
-                        <h3>Host controls</h3>
-                        <p className="small-copy">Host-only controls for the lobby and active game.</p>
-                        <div className="button-row">
-                          <button disabled={!isHost || snapshot.lockStatus !== "open"} onClick={() => sendEvent({ payload: { roomId: activeRoom.id }, type: "room.randomize-seats" })} type="button">
-                            Randomize seats
-                          </button>
-                        </div>
-                        <div className="swap-grid">
-                          <label>
-                            <span>Left seat</span>
-                            <select
-                              disabled={!isHost || snapshot.lockStatus !== "open"}
-                              onChange={(event) => setRoomForms((current) => ({ ...current, seatSwapLeft: event.target.value }))}
-                              value={roomForms.seatSwapLeft}
-                            >
-                              <option value="">Select</option>
-                              {seatedPlayers.map((seat) => (
-                                <option key={`left-${seat.seat}`} value={String(seat.seat)}>
-                                  Seat {seat.seat + 1}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label>
-                            <span>Right seat</span>
-                            <select
-                              disabled={!isHost || snapshot.lockStatus !== "open"}
-                              onChange={(event) => setRoomForms((current) => ({ ...current, seatSwapRight: event.target.value }))}
-                              value={roomForms.seatSwapRight}
-                            >
-                              <option value="">Select</option>
-                              {seatedPlayers.map((seat) => (
-                                <option key={`right-${seat.seat}`} value={String(seat.seat)}>
-                                  Seat {seat.seat + 1}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        <button
-                          disabled={!isHost || snapshot.lockStatus !== "open"}
-                          onClick={() =>
-                            sendEvent({
-                              payload: {
-                                leftSeat: Number(roomForms.seatSwapLeft),
-                                rightSeat: Number(roomForms.seatSwapRight)
-                              },
-                              type: "room.seat-swap"
-                            })
-                          }
-                          type="button"
-                        >
-                          Swap seats
-                        </button>
-                        {activeGame && isHost ? (
+                      {roomDetailsVisible ? (
+                        <div className="card">
+                          <h3>房主管理</h3>
+                          <p className="small-copy">仅房主可用，用于大厅和进行中的游戏。</p>
                           <div className="button-row">
-                            <button className="ghost-button danger" onClick={endGame} type="button">
-                              End current game
+                            <button disabled={!isHost || snapshot.lockStatus !== "open"} onClick={() => sendEvent({ payload: { roomId: activeRoom.id }, type: "room.randomize-seats" })} type="button">
+                              随机座位
                             </button>
                           </div>
-                        ) : null}
-                      </div>
+                          <div className="swap-grid">
+                            <label>
+                              <span>左侧座位</span>
+                              <select
+                                disabled={!isHost || snapshot.lockStatus !== "open"}
+                                onChange={(event) => setRoomForms((current) => ({ ...current, seatSwapLeft: event.target.value }))}
+                                value={roomForms.seatSwapLeft}
+                              >
+                                <option value="">请选择</option>
+                                {seatedPlayers.map((seat) => (
+                                  <option key={`left-${seat.seat}`} value={String(seat.seat)}>
+                                    座位 {seat.seat + 1}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              <span>右侧座位</span>
+                              <select
+                                disabled={!isHost || snapshot.lockStatus !== "open"}
+                                onChange={(event) => setRoomForms((current) => ({ ...current, seatSwapRight: event.target.value }))}
+                                value={roomForms.seatSwapRight}
+                              >
+                                <option value="">请选择</option>
+                                {seatedPlayers.map((seat) => (
+                                  <option key={`right-${seat.seat}`} value={String(seat.seat)}>
+                                    座位 {seat.seat + 1}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <button
+                            disabled={!isHost || snapshot.lockStatus !== "open"}
+                            onClick={() =>
+                              sendEvent({
+                                payload: {
+                                  leftSeat: Number(roomForms.seatSwapLeft),
+                                  rightSeat: Number(roomForms.seatSwapRight)
+                                },
+                                type: "room.seat-swap"
+                              })
+                            }
+                            type="button"
+                          >
+                            交换座位
+                          </button>
+                          {activeGame && isHost ? (
+                            <div className="button-row">
+                              <button className="ghost-button danger" onClick={endGame} type="button">
+                                结束当前游戏
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
 
                     <section className="card game-card">
                       <div className="card-header">
                         <div>
-                          <h3>Game</h3>
+                          <h3>游戏</h3>
                           {activeGame ? (
                             <p className="meta-line">
-                              Phase {activeGame.status} • Round {activeGame.round} • Attempt {activeGame.attempt}
+                              阶段：{gameStatusLabel(activeGame.status)} • 轮次：{activeGame.round} • 尝试：{activeGame.attempt}
                             </p>
                           ) : (
-                            <p className="meta-line">No active game.</p>
+                            <p className="meta-line">当前没有进行中的游戏。</p>
                           )}
                         </div>
                         {activeGame ? (
                           <div className="score-strip">
-                            <span>Quests {missionTrack(activeGame.missionResults)}</span>
-                            <span>Rejects {activeGame.rejectTracker}/5</span>
+                            <span>任务进度 {missionTrack(activeGame.missionResults)}</span>
+                            <span>否决 {activeGame.rejectTracker}/5</span>
                           </div>
                         ) : null}
                       </div>
@@ -1885,19 +2013,19 @@ export function App() {
                         <div className="secret-card">
                           <div className="card-header">
                             <div>
-                              <h4>Secret brief</h4>
-                              <p className="small-copy">Click to reveal your private information. Click the reveal card again to hide it.</p>
+                              <h4>身份简报</h4>
+                              <p className="small-copy">点击查看你的私密信息，再次点击可隐藏。</p>
                             </div>
                             <button
                               className={isSecretRevealActive ? "chip active" : "chip"}
                               onClick={() => setIsSecretRevealActive((current) => !current)}
                               type="button"
                             >
-                              {isSecretRevealActive ? "Hide reveal" : "Click to reveal"}
+                              {isSecretRevealActive ? "隐藏信息" : "点击查看"}
                             </button>
                             {activeGame ? (
                               <button className="chip" onClick={refreshSecretState} type="button">
-                                Refresh brief
+                                刷新简报
                               </button>
                             ) : null}
                           </div>
@@ -1910,28 +2038,28 @@ export function App() {
                                 <div className="secret-layout">
                                   <div className="secret-details">
                                     <p>
-                                      <span className="secret-label">User</span>
-                                      <strong>{session?.user.displayName ?? "Player"}</strong>
+                                      <span className="secret-label">用户</span>
+                                      <strong>{session?.user.displayName ?? "玩家"}</strong>
                                     </p>
                                     <p>
-                                      <span className="secret-label">Role</span>
+                                      <span className="secret-label">角色</span>
                                       <strong>{secretState.role ? roleLabel(secretState.role) : "观战"}</strong>
                                     </p>
                                     <p>
-                                      <span className="secret-label">Side</span>
+                                      <span className="secret-label">阵营</span>
                                       <strong>{teamLabel(secretState)}</strong>
                                     </p>
                                     <div className="secret-visible-block">
                                       <p>
-                                        <span className="secret-label">Visible players</span>
+                                        <span className="secret-label">可见玩家</span>
                                       </p>
                                       <ul className="visible-players">
-                                        {secretState.visiblePlayers.length === 0 ? <li>No extra private information.</li> : null}
+                                        {secretState.visiblePlayers.length === 0 ? <li>没有额外可见的私密信息。</li> : null}
                                         {secretState.visiblePlayers.map((player) => (
                                           <li key={`${player.userId}-${player.reason}`}>
                                             {player.displayName}
                                             {player.role ? ` • ${roleLabel(player.role)}` : ""}
-                                            {player.team ? ` • ${player.team}` : ""}
+                                            {player.team ? ` • ${teamName(player.team)}` : ""}
                                           </li>
                                         ))}
                                       </ul>
@@ -1949,7 +2077,7 @@ export function App() {
                                 </div>
                               </>
                             ) : (
-                              <p>Private information hidden.</p>
+                              <p>私密信息已隐藏。</p>
                             )}
                           </div>
                         </div>
@@ -1958,8 +2086,8 @@ export function App() {
                       {!activeGame ? (
                         <div className="start-game-grid">
                           <div>
-                            <h4>Special roles</h4>
-                            <p className="small-copy">Merlin, Percival, Assassin, and Morgana are mandatory. At 7+ players, the host may also add Mordred or Oberon.</p>
+                            <h4>特殊角色</h4>
+                            <p className="small-copy">梅林、派西维尔、刺客、莫甘娜为必选。7 人及以上时，房主可额外加入莫德雷德或奥伯伦。</p>
                             <div className="checkbox-grid">
                               {MANDATORY_ROLES.map((role) => (
                                 <label className="checkbox" key={role}>
@@ -1981,39 +2109,39 @@ export function App() {
                             </div>
                           </div>
                           <button disabled={!isHost || players.length < 5 || players.length > 10} onClick={startGame} type="button">
-                            Start game
+                            开始游戏
                           </button>
                         </div>
                       ) : (
                         <div className="game-flow">
                           <div className="callout">
                             <p>
-                              Leader: <strong>{proposalLeaderName}</strong>
+                              队长：<strong>{proposalLeaderName}</strong>
                             </p>
                             <p>
-                              Mission size: <strong>{activeGame.missionSize ?? "n/a"}</strong>
+                              任务人数：<strong>{activeGame.missionSize ?? "无"}</strong>
                             </p>
                             {proposedTeam.length > 0 ? (
                               <p>
-                                Proposed team: <strong>{proposedTeam.map((player) => player.displayName).join(", ")}</strong>
+                                提议队伍：<strong>{proposedTeam.map((player) => player.displayName).join("、")}</strong>
                               </p>
                             ) : null}
                             {activeGame.status === "team-vote" && pendingTeamVoters.length > 0 ? (
                               <p>
-                                Vote please: <strong>{pendingTeamVoters.join(" ")}</strong>
+                                等待投票：<strong>{pendingTeamVoters.join("、")}</strong>
                               </p>
                             ) : null}
                           </div>
 
                           {activeGame.status === "night" ? (
                             <div className="action-block">
-                              <h4>Night reveal</h4>
+                              <h4>夜晚查看</h4>
                               <p className="small-copy">
-                                Reveal private information first. The host advances to team proposal when everyone is ready.
+                                请先查看私密信息。所有人准备好后，由房主推进到提名阶段。
                               </p>
                               {canAdvanceNight ? (
                                 <button onClick={advanceToProposal} type="button">
-                                  Advance to proposal
+                                  进入提名阶段
                                 </button>
                               ) : null}
                             </div>
@@ -2021,8 +2149,8 @@ export function App() {
 
                           {canProposeTeam ? (
                             <div className="action-block">
-                              <h4>Propose quest team</h4>
-                              <p className="small-copy">Choose exactly {missionSize} players.</p>
+                              <h4>提议任务队伍</h4>
+                              <p className="small-copy">请准确选择 {missionSize} 名玩家。</p>
                               <div className="checkbox-grid">
                                 {players.map((player) => (
                                   <label className="checkbox" key={`team-${player.userId}`}>
@@ -2036,17 +2164,17 @@ export function App() {
                                 ))}
                               </div>
                               <button onClick={submitTeamProposal} type="button">
-                                Submit team
+                                提交队伍
                               </button>
                             </div>
                           ) : null}
 
                           {canSubmitTeamVote ? (
                             <div className="action-block">
-                              <h4>Team vote</h4>
+                              <h4>队伍表决</h4>
                               <div className="button-row">
                                 <button disabled={teamVoteLocked} onClick={() => submitTeamVote("approve")} type="button">
-                                  Approve
+                                  赞成
                                 </button>
                                 <button
                                   className="ghost-button danger"
@@ -2054,21 +2182,21 @@ export function App() {
                                   onClick={() => submitTeamVote("reject")}
                                   type="button"
                                 >
-                                  Reject
+                                  反对
                                 </button>
                               </div>
                               {teamVoteLocked && submittedTeamVote ? (
-                                <p className="small-copy">You {submittedTeamVote === "approve" ? "approved" : "rejected"}.</p>
+                                <p className="small-copy">你已选择：{submittedTeamVote === "approve" ? "赞成" : "反对"}。</p>
                               ) : null}
                             </div>
                           ) : null}
 
                           {canSubmitQuestVote ? (
                             <div className="action-block">
-                              <h4>Quest vote</h4>
+                              <h4>任务投票</h4>
                               <div className="button-row">
                                 <button disabled={questVoteLocked} onClick={() => submitQuestVote("success")} type="button">
-                                  Success
+                                  成功
                                 </button>
                                 {secretState?.team === "evil" ? (
                                   <button
@@ -2077,17 +2205,17 @@ export function App() {
                                     onClick={() => submitQuestVote("fail")}
                                     type="button"
                                   >
-                                    Fail
+                                    失败
                                   </button>
                                 ) : null}
                               </div>
-                              {questVoteLocked ? <p className="small-copy">Quest done.</p> : null}
+                              {questVoteLocked ? <p className="small-copy">任务票已提交。</p> : null}
                             </div>
                           ) : null}
 
                           {canSubmitAssassination && activeGame.assassination ? (
                             <div className="action-block">
-                              <h4>Assassination</h4>
+                              <h4>刺杀</h4>
                               <div className="radio-grid">
                                 {activeGame.assassination.candidateUserIds.map((userId) => (
                                   <label className="checkbox" key={`target-${userId}`}>
@@ -2104,14 +2232,14 @@ export function App() {
                                 ))}
                               </div>
                               <button disabled={!roomForms.selectedAssassinationTarget} onClick={submitAssassination} type="button">
-                                Confirm assassination
+                                确认刺杀
                               </button>
                             </div>
                           ) : null}
 
                           {isHost && gamePaused ? (
                             <div className="action-block">
-                              <h4>Paused game controls</h4>
+                              <h4>暂停期管理</h4>
                               <div className="stack-list">
                                 {disconnectedPlayers.map((player) => (
                                   <div className="button-row" key={`paused-controls-${player.userId}`}>
@@ -2120,14 +2248,14 @@ export function App() {
                                       onClick={() => revealDisconnectedPlayer(player.userId)}
                                       type="button"
                                     >
-                                      Reveal {player.displayName}
+                                      公开 {player.displayName}
                                     </button>
                                     <button
                                       className="ghost-button danger"
                                       onClick={() => kickOrForceRemove(player.userId)}
                                       type="button"
                                     >
-                                      Force remove {player.displayName}
+                                      强制移除 {player.displayName}
                                     </button>
                                   </div>
                                 ))}
@@ -2139,23 +2267,23 @@ export function App() {
                     </section>
                   </>
                 ) : (
-                  <p className="empty">Connecting to room.</p>
+                  <p className="empty">正在连接房间。</p>
                 )}
               </section>
 
               <section className="panel history-panel">
                 <div className="panel-header">
                   <div>
-                    <p className="eyebrow">History</p>
-                    <h2>Live activity</h2>
+                    <p className="eyebrow">动态</p>
+                    <h2>实时活动</h2>
                   </div>
-                  {lastEvent ? <p className="small-copy">Latest event: {lastEvent.type}</p> : null}
+                  {lastEvent ? <p className="small-copy">最新事件：{roomEventTypeLabel(lastEvent.type)}</p> : null}
                 </div>
 
                 {showLiveActivity ? (
                   <div className="card">
                     <ul className="activity-list">
-                      {liveActivity.length === 0 ? <li className="empty">Live room events will appear here.</li> : null}
+                      {liveActivity.length === 0 ? <li className="empty">房间实时活动会显示在这里。</li> : null}
                       {liveActivity.map((item) => (
                         <li key={item.id}>
                           <strong>{item.message}</strong>
@@ -2164,7 +2292,7 @@ export function App() {
                     </ul>
                   </div>
                 ) : (
-                  <p className="empty">Live activity appears only while a game is active.</p>
+                  <p className="empty">只有在游戏进行中才会显示实时活动。</p>
                 )}
               </section>
             </section>
@@ -2174,13 +2302,29 @@ export function App() {
 
       {activeChatPopup ? (
         <button
-          aria-label="Dismiss chat message"
+          aria-label="关闭聊天消息"
           className="chat-popup-overlay"
           onClick={() => setChatPopups((current) => current.slice(1))}
           type="button"
         >
           <span className="chat-popup-card">{activeChatPopup.message}</span>
         </button>
+      ) : null}
+
+      {winnerPopup ? (
+        <div
+          aria-modal="true"
+          className="chat-popup-overlay"
+          role="dialog"
+        >
+          <div className="chat-popup-card">
+            <strong>{winnerPopup.winner === "good" ? "好人胜利" : winnerPopup.winner === "evil" ? "坏人胜利" : "游戏结束"}</strong>
+            <p>{winnerPopup.message}</p>
+            <button className="ghost-button" onClick={() => setWinnerPopup(null)} type="button">
+              关闭
+            </button>
+          </div>
+        </div>
       ) : null}
     </main>
   );

@@ -118,6 +118,7 @@ function snapshotPayload(): RoomSnapshotEventPayload {
       status: "proposal",
       teamVotesSubmitted: null
     },
+    activityLog: [],
     lockStatus: "locked",
     players: [
       { connected: true, displayName: "Host", role: "host", userId: "host-1" },

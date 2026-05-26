@@ -502,6 +502,7 @@ label span {
 .activity-list strong {
   font-size: 0.94rem;
   line-height: 1.45;
+  white-space: pre-line;
 }
 
 .replay-list pre {
@@ -626,6 +627,20 @@ label span {
   line-height: 1.5;
   padding: 1.35rem 1.5rem;
   text-align: center;
+}
+
+.chat-popup-card strong {
+  display: block;
+  font-size: 1.35rem;
+  margin-bottom: 0.65rem;
+}
+
+.chat-popup-card p {
+  margin: 0 0 1rem;
+}
+
+.chat-popup-card button {
+  margin: 0 auto;
 }
 
 @media (min-width: 820px) {

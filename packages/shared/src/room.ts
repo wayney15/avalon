@@ -72,11 +72,18 @@ export interface RoomSnapshotEventPayload {
   seats: RoomSeat[];
   lockStatus: RoomVisibility;
   activeGame: ActiveGameView | null;
+  activityLog: RoomActivityItem[];
   viewerSecretState: ViewerSecretState | null;
   viewerActionState: {
     teamVoteSubmitted: boolean;
     questVoteSubmitted: boolean;
   } | null;
+}
+
+export interface RoomActivityItem {
+  id: string;
+  occurredAt: string;
+  message: string;
 }
 
 export interface CreateRoomRequest {
